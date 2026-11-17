@@ -1,16 +1,22 @@
 import express from "express";
+import dns from "node:dns";
 import { gzipSync } from "node:zlib";
+
+// 部分网络下 bbs.hupu.com 的 AAAA 记录连不通，Node 会先试 IPv6 再等超时；
+// 桌面端专区页依赖这个域名，置顶 IPv4 省一次 8s 的失败等待。
+dns.setDefaultResultOrder("ipv4first");
 import {
   getHomeFeed,
   getZoneCategories,
   getZonePage,
-  getZoneHotThreads,
+  getZoneSorted,
   getThread,
   getThreadTimes,
   getLolNews,
   getAccountLolThreads,
   fetchZonePosts,
   fetchReplies,
+  cacheDelete,
 } from "./lib/hupu.js";
 import {
   getSchedule,
@@ -23,7 +29,15 @@ import {
   isBizTag,
 } from "./lib/match.js";
 import {
+  getZhibo8Page,
+  getZhibo8Article,
+  getZhibo8Comments,
+  resetZhibo8Stream,
+} from "./lib/zhibo8.js";
+import {
   homePage,
+  zhibo8Page,
+  zhibo8ArticlePage,
   zonesPage,
   zonePage,
   threadPage,
@@ -84,6 +98,12 @@ const fail = (res, title, msg, status = 500) =>
 /* ---------- 页面 ---------- */
 
 app.get("/", async (req, res) => {
+  // 「刷新」按钮：先丢掉资讯缓存，再回到干净的地址重新渲染
+  if (String(req.query.refresh ?? "") === "1") {
+    cacheDelete("news:");
+    cacheDelete("acct:lol:");
+    return res.redirect(303, "/");
+  }
   try {
     // 首页资讯主源：电竞新闻列表（tagCode=lol，固定 35 条，全带封面图与精确时间）
     // 一次请求拿全、直接铺开，不再需要「加载更多」
@@ -138,6 +158,46 @@ app.get("/", async (req, res) => {
   }
 });
 
+/* ---------- 直播吧 · 电竞资讯（20 条一页，上游是游标翻页） ---------- */
+
+app.get("/zhibo8", async (req, res) => {
+  const page = Math.min(30, Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1));
+  try {
+    // 「刷新」按钮：重置内存流 + 丢掉上游分片缓存，再回干净地址
+    if (String(req.query.refresh ?? "") === "1") {
+      await resetZhibo8Stream();
+      return res.redirect(303, page > 1 ? `/zhibo8?page=${page}` : "/zhibo8");
+    }
+    const data = await getZhibo8Page(page);
+    res.send(zhibo8Page({ page, ...data }));
+  } catch (e) {
+    fail(res, "电竞资讯 · 直播吧", `电竞资讯获取失败：${e.message}`);
+  }
+});
+
+/** 直播吧文章详情（站内阅读） */
+app.get("/zhibo8/:date/:file", async (req, res) => {
+  const { date, file } = req.params;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^[\w-]+$/.test(file)) {
+    return fail(res, "电竞资讯 · 直播吧", "文章地址不合法", 400);
+  }
+  try {
+    const article = await getZhibo8Article(date, file);
+    if (!article || !article.html) {
+      return fail(res, "电竞资讯 · 直播吧", "这篇文章没抓到正文，可能已下线", 404);
+    }
+    // 评论拿不到不影响正文
+    const comments = await getZhibo8Comments(article.commentFile).catch(() => ({
+      total: 0,
+      hot: [],
+      list: [],
+    }));
+    res.send(zhibo8ArticlePage({ article, comments }));
+  } catch (e) {
+    fail(res, "电竞资讯 · 直播吧", `文章获取失败：${e.message}`);
+  }
+});
+
 /* ---------- 赛程 ---------- */
 
 app.get("/matches", async (req, res) => {
@@ -181,11 +241,22 @@ app.get("/zones", async (req, res) => {
 app.get("/zone/:topicId", async (req, res) => {
   const topicId = parseInt(req.params.topicId, 10);
   if (!topicId) return fail(res, "专区 · 虎扑网页版", "专区 ID 不合法", 400);
+  const sort = String(req.query.sort ?? "");
+  const page = Math.min(50, Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1));
   try {
+    // 桌面端专区：列表 + 排序 tab（最新回复 / 最新发布 / 24小时榜）
+    const desk = await getZoneSorted(topicId, { sort, page }).catch(() => null);
+    if (desk) {
+      // 专区头部（关注/帖子数）只有手机端 SSR 给，拿不到就用桌面端字段兜底
+      const meta = await getZonePage(topicId)
+        .then((d) => d.zone)
+        .catch(() => ({}));
+      return res.send(zonePage({ ...desk, zone: { ...desk.zone, ...meta } }));
+    }
+
+    // 没有桌面路径的专区：回退手机端（游标翻页，无排序）
     const data = await getZonePage(topicId);
-    // 英雄联盟专区顶部加「JR 热议」（作为精选置顶，允许与下方列表重复）
-    const hotPosts = topicId === 85 ? await getZoneHotThreads(85).catch(() => []) : [];
-    res.send(zonePage({ ...data, hotPosts }));
+    res.send(zonePage({ ...data }));
   } catch (e) {
     fail(res, "专区 · 虎扑网页版", `专区数据获取失败（topicId: ${topicId}）：${e.message}`);
   }
@@ -272,6 +343,23 @@ app.get("/api/zone-posts", async (req, res) => {
   }
   try {
     res.json(await fetchZonePosts(topicId, page, cursor));
+  } catch (e) {
+    res.status(502).json({ error: e instanceof Error ? e.message : "upstream error" });
+  }
+});
+
+/** 专区桌面端翻页（排序 tab + 页码，50 条/页） */
+app.get("/api/zone-posts-desk", async (req, res) => {
+  const topicId = parseInt(String(req.query.topicId ?? ""), 10);
+  const page = parseInt(String(req.query.page ?? "2"), 10);
+  const sort = String(req.query.sort ?? "");
+  if (!topicId || Number.isNaN(page) || page < 2) {
+    return res.status(400).json({ error: "invalid params" });
+  }
+  try {
+    const d = await getZoneSorted(topicId, { sort, page });
+    if (!d) return res.status(404).json({ error: "zone not found" });
+    res.json({ posts: d.posts, done: d.page >= d.totalPages });
   } catch (e) {
     res.status(502).json({ error: e instanceof Error ? e.message : "upstream error" });
   }

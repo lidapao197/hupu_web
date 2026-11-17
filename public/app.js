@@ -143,6 +143,7 @@
       '<div class="post-title">' + esc(p.title) + "</div>" +
       '<div class="post-meta">' +
       '<span class="m">' + esc(p.username) + "</span>" +
+      (p.time && p.time !== "刚刚" ? '<span class="m time">' + esc(p.time) + "</span>" : "") +
       (p.isVideo ? '<span class="m">视频</span>' : "") +
       (p.isVote ? '<span class="m">投票</span>' : "") +
       '<span class="m light">' + REPLY_ICON + esc(p.replies) + "</span>" +
@@ -211,6 +212,10 @@
       if (kind === "zone") {
         url = "/api/zone-posts?topicId=" + btn.dataset.topicId +
           "&page=" + (page + 1) + "&cursor=" + encodeURIComponent(btn.dataset.cursor || "");
+      } else if (kind === "zone-desk") {
+        url = "/api/zone-posts-desk?topicId=" + btn.dataset.topicId +
+          "&sort=" + encodeURIComponent(btn.dataset.sort || "") +
+          "&page=" + (page + 1);
       } else if (kind === "home") {
         url = "/api/home-more?before=" + encodeURIComponent(btn.dataset.before || "");
       } else if (kind === "score") {
@@ -234,7 +239,7 @@
             for (var i = 0; i < els.length; i++) seen[els[i].getAttribute("data-id")] = 1;
             items = items.filter(function (c) { return !seen[c.id]; });
           }
-          var render = kind === "zone" ? zonePostRowHtml
+          var render = kind === "zone" || kind === "zone-desk" ? zonePostRowHtml
             : kind === "home" ? feedCardHtml
             : kind === "score" ? scoreCommentHtml
             : commentHtml;
@@ -253,6 +258,8 @@
           var done;
           if (kind === "zone") {
             done = !d.nextCursor;
+          } else if (kind === "zone-desk") {
+            done = !!d.done || items.length === 0;
           } else if (kind === "home") {
             done = !!d.done || items.length === 0;
           } else if (kind === "score") {
