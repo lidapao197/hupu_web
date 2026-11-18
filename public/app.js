@@ -1,68 +1,6 @@
-/* 虎扑网页版 · 前端脚本：主题切换 + 加载更多（其余全部由服务端渲染） */
+/* 虎扑网页版 · 前端脚本：加载更多 + 返回/回顶（其余全部由服务端渲染） */
 (function () {
   "use strict";
-
-  /* ============ 主题切换 ============ */
-
-  var root = document.documentElement;
-  var themeBtn = document.getElementById("themeBtn");
-  var themePanel = document.getElementById("themePanel");
-  var modeBtn = document.getElementById("modeBtn");
-  var topbar = document.getElementById("topbar");
-
-  function syncThemePanel() {
-    if (!themePanel) return;
-    var accent = root.dataset.accent || "red";
-    themePanel.querySelectorAll(".swatch").forEach(function (sw) {
-      sw.classList.toggle("active", sw.dataset.accent === accent);
-    });
-    var dark = root.dataset.theme === "dark";
-    if (modeBtn) modeBtn.setAttribute("aria-checked", dark ? "true" : "false");
-  }
-  syncThemePanel();
-
-  function store(key, val) {
-    try { localStorage.setItem(key, val); } catch (e) { /* 隐私模式下忽略 */ }
-  }
-
-  if (themeBtn && themePanel) {
-    themeBtn.addEventListener("click", function () {
-      var open = themePanel.hidden;
-      themePanel.hidden = !open;
-      themeBtn.setAttribute("aria-expanded", open ? "true" : "false");
-    });
-
-    document.addEventListener("mousedown", function (e) {
-      if (themePanel.hidden || !topbar) return;
-      if (!topbar.contains(e.target)) {
-        themePanel.hidden = true;
-        themeBtn.setAttribute("aria-expanded", "false");
-      }
-    });
-
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && !themePanel.hidden) {
-        themePanel.hidden = true;
-        themeBtn.setAttribute("aria-expanded", "false");
-      }
-    });
-
-    themePanel.addEventListener("click", function (e) {
-      var sw = e.target.closest(".swatch");
-      if (sw) {
-        root.dataset.accent = sw.dataset.accent;
-        store("hp-accent", sw.dataset.accent);
-        syncThemePanel();
-        return;
-      }
-      if (e.target.closest("#modeBtn")) {
-        var dark = root.dataset.theme !== "dark";
-        root.dataset.theme = dark ? "dark" : "light";
-        store("hp-theme", dark ? "dark" : "light");
-        syncThemePanel();
-      }
-    });
-  }
 
   /* ============ 返回顶部 ============ */
 

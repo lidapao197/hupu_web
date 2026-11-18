@@ -385,14 +385,13 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, () => {
-  // 用英文输出：bat 窗口是 GBK 代码页，中文会乱码
   console.log("");
   console.log("=========================================");
-  console.log("  Hupu Web started successfully!");
+  console.log("  虎扑网页版 启动成功");
   console.log("");
-  console.log(`  Please visit:  http://localhost:${PORT}`);
+  console.log(`  访问地址：http://localhost:${PORT}`);
   console.log("");
-  console.log("  Press Ctrl+C to stop the service.");
+  console.log("  按 Ctrl+C 停止服务");
   console.log("=========================================");
   console.log("");
 });
